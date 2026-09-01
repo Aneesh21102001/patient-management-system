@@ -1,0 +1,225 @@
+services:
+
+  # =========================
+  # PostgreSQL
+  # =========================
+
+  auth-service-db:
+    image: postgres:18
+    container_name: auth-service-db
+    environment:
+      POSTGRES_DB: db
+      POSTGRES_USER: admin_user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5001:5432"
+    volumes:
+      - ./auth-service/../db_volumes/auth-service-db:/var/lib/postgresql
+    networks:
+      - patient-network
+    restart: "no"
+
+  patient-service-db:
+    image: postgres:18
+    container_name: patient-service-db
+    environment:
+      POSTGRES_DB: patientdb
+      POSTGRES_USER: admin_viewer
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - patient_service_data:/var/lib/postgresql
+    networks:
+      - patient-network
+    restart: "no"
+
+
+  # =========================
+  # Kafka
+  # =========================
+
+  kafka:
+    image: bitnamilegacy/kafka:4.0.0-debian-12-r10
+    container_name: kafka
+    environment:
+      KAFKA_CFG_NODE_ID: 0
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
+
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT
+
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    networks:
+      - patient-network
+      - internal
+    restart: "no"
+
+
+  # =========================
+  # Auth Service
+  # =========================
+
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    image: auth-service:latest
+    container_name: auth-service
+    environment:
+      SPRING_DATASOURCE_USERNAME: admin_user
+      SPRING_DATASOURCE_PASSWORD: password
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_SQL_INIT_MODE: always
+      SPRING_DATASOURCE_URL: jdbc:postgresql://auth-service-db:5432/db
+    expose:
+      - "4005"
+    depends_on:
+      - auth-service-db
+    networks:
+      - patient-network
+    restart: "no"
+
+
+  # =========================
+  # Patient Service
+  # =========================
+
+  patient-service:
+    build:
+      context: ./patient-service
+      dockerfile: Dockerfile
+    image: patient-service:latest
+    container_name: patient-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://patient-service-db:5432/patientdb
+      SPRING_DATASOURCE_USERNAME: admin_viewer
+      SPRING_DATASOURCE_PASSWORD: password
+
+      BILLING_SERVICE_ADDRESS: billing-service
+      BILLING_SERVICE_GRPC_PORT: 9001
+
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+    ports:
+      - "4000:4000"
+    depends_on:
+      - patient-service-db
+      - billing-service
+      - kafka
+    networks:
+      - patient-network
+    restart: "no"
+
+
+  # =========================
+  # Billing Service
+  # =========================
+
+  billing-service:
+    build:
+      context: ./billing-service
+      dockerfile: Dockerfile
+    image: billing-service:latest
+    container_name: billing-service
+    ports:
+      - "4001:4001"
+      - "9001:9001"
+    networks:
+      - patient-network
+      - internal
+    restart: "no"
+
+
+  # =========================
+  # Analytics Service
+  # =========================
+
+  analytics-service:
+    build:
+      context: ./analytics-service
+      dockerfile: Dockerfile
+    image: analytics-service:latest
+    container_name: analytics-service
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "4002:4002"
+    depends_on:
+      - kafka
+    networks:
+      - internal
+    restart: "no"
+
+
+  # =========================
+  # API Gateway
+  # =========================
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    image: api-gateway:latest
+    container_name: api-gateway
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:4005
+    ports:
+      - "4004:4004"
+    depends_on:
+      - auth-service
+      - patient-service
+    networks:
+      - patient-network
+      - internal
+    restart: "no"
+
+
+  # =========================
+  # LocalStack
+  # =========================
+
+  localstack:
+    image: localstack/localstack:latest
+    container_name: localstack
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN}
+    ports:
+      - "4566:4566"
+      - "4510-4559:4510-4559"
+    volumes:
+      - "${LOCALSTACK_VOLUME_DIR:-./.localstack}:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    networks:
+      - patient-network
+    restart: "no"
+
+
+# =========================
+# Networks
+# =========================
+
+networks:
+  internal:
+    name: internal
+
+  patient-network:
+    name: patient-network
+
+
+# =========================
+# Volumes
+# =========================
+
+volumes:
+  patient_service_data:
+    name: patient_service_data
