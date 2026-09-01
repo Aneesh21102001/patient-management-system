@@ -31,8 +31,6 @@ public class AuthIntegrationTest {
                 .body("token", notNullValue())
                 .extract()
                 .response();
-
-        System.out.println("Generated Token: " + response.jsonPath().getString("token"));
     }
 
     @Test

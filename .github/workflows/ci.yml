@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build and test services
+        run: |
+          mvn -f analytics-service/pom.xml clean test
+          mvn -f api-gateway/pom.xml clean test
+          mvn -f auth-service/pom.xml clean test
+          mvn -f billing-service/pom.xml clean test
+          mvn -f patient-service/pom.xml clean test
+          mvn -f infrastructure/pom.xml clean test
+
+      - name: Start Docker Compose
+        env:
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+        run: docker compose up -d --build
+
+      - name: Wait for API Gateway
+        run: |
+          for i in {1..30}; do
+            if curl --fail http://localhost:4004/actuator/health; then
+              exit 0
+            fi
+            sleep 5
+          done
+
+          docker compose ps
+          docker compose logs
+          exit 1
+
+      - name: Run integration tests
+        working-directory: integration-tests
+        run: mvn clean test
+
+      - name: Show Docker logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop Docker Compose
+        if: always()
+        run: docker compose down -v
